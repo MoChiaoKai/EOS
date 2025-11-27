@@ -30,7 +30,7 @@ void cleanup_handler(int signum) {
 }
 
 int P (int s){
-    struct sembuf sop; z
+    struct sembuf sop; 
     sop.sem_num = 0;
     sop.sem_op = -1; // acquire
     sop.sem_flg = 0; 
