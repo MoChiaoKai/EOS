@@ -12,15 +12,25 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <signal.h> 
 
 #define BALANCE_FILE "balance.txt"
 #define SEM_MODE 0666 /* rw(owner)-rw(group)-rw(other) permission */
 #define SEM_KEY 314512057
 
 int sem;
+int socketfd;
+int sem_id;   
+
+void cleanup_handler(int signum) {
+    if (signum == SIGINT) {
+        semctl(sem_id, 0, IPC_RMID, 0);
+        exit(EXIT_SUCCESS); 
+    }
+}
 
 int P (int s){
-    struct sembuf sop; 
+    struct sembuf sop; z
     sop.sem_num = 0;
     sop.sem_op = -1; // acquire
     sop.sem_flg = 0; 
@@ -138,10 +148,10 @@ void handle_client(int connfd) {
 }
 
 int main(int argc, char **argv){
-    int socketfd;
-    int sem_id;
     pid_t childpid;
     int status;
+
+    signal(SIGINT, cleanup_handler);
 
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <port>\n", argv[0]);
@@ -225,11 +235,10 @@ int main(int argc, char **argv){
         } else if (pid == 0) {
             close(socketfd); 
             handle_client(connfd);
-             exit(EXIT_SUCCESS); 
+            exit(EXIT_SUCCESS); 
         } else { 
             close(connfd); 
             }
-        }
-
+    }
     return 0;
 }
