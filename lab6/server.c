@@ -96,7 +96,7 @@ void handle_client(int connfd) {
     ssize_t nbytes;
 
     nbytes = read(connfd, buffer, sizeof(buffer) - 1);
-
+   
     buffer[nbytes] = '\0';
 
     char operation[20];
