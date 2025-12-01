@@ -9,33 +9,41 @@
 
 #define DB_FILENAME "dorm_db.dat" 
 #define MAX_DORMS 10              
+#define JSON_BUFFER_SIZE 1024 // Unified buffer size for main JSON data
 
 // --- Structure Definitions ---
+
+// Device Type Enumeration
+typedef enum {
+    DEV_WASHER = 0,   // Washer
+    DEV_DRYER  = 1,   // Dryer
+    DEV_AC     = 2    // Air Conditioner
+} DeviceType;
 
 typedef struct {
     char name[32];      
     bool is_on;         
-    int remaining_time; // 設備排程剩餘時間 (minutes)
-    char icon[8];       // 設備圖示
+    int remaining_time; // Remaining time for device scheduling (minutes)
+    char icon[8];       // Device icon (Retained for data integrity)
+    DeviceType type;    // Device type identifier
 } Device;
 
 typedef struct {
-    char dorm_location[100]; // 宿舍編號/位置
-    Device paired_devices[5]; // 設備清單
+    char dorm_location[100]; // Dormitory location/ID
+    Device paired_devices[5]; // Paired device list (Max 5)
     int device_count;
 } UserData;
 
-// --- 固定的可選裝置清單 (Fixed Available Devices) ---
+// --- Fixed Available Devices List ---
 Device g_available_devices[] = {
-    {"Air Conditioner", false, 0, "❄️"}, 
-    {"Light", false, 0, "💡"}, 
-    {"Water Heater", false, 0, "♨️"}, 
-    {"Vent Fan", false, 0, "💨"}, 
-    {"Curtain", false, 0, "🎭"}
+    // Device Name, Status, Remaining Time, Icon, Type
+    {"Washer", false, 0, "🧺", DEV_WASHER}, 
+    {"Dryer", false, 0, "🔥", DEV_DRYER},
+    {"Air Conditioner", false, 0, "❄️", DEV_AC}
 };
 #define MAX_AVAILABLE_DEVICES (sizeof(g_available_devices) / sizeof(Device))
 
-// --- 全域資料庫 (Dynamic Database) ---
+// --- Global Database (Dynamic Database) ---
 UserData g_dorm_db[MAX_DORMS]; 
 int g_db_size = 0;             
 
@@ -44,17 +52,17 @@ int get_int_input();
 void notify_user(const char *task_name);
 void schedule_task(const char *task_name, int duration_sec);
 
-// --- 持久化函式原型 ---
+// --- Persistence Function Prototypes ---
 void load_db();
 void save_db();
 
-// --- 核心流程與功能函式原型 ---
+// --- Core Logic & Feature Function Prototypes ---
 int find_dorm_data(const char *location);
 void initial_setup(UserData *user);
 bool setup_interface(UserData *user, const char *ip, int port);
 void run_main_interface(UserData *user, const char *ip, int port);
 void display_device_status(UserData *user);    
-void set_estimated_time(UserData *user);       
+void set_estimated_time(UserData *user);        
 void device_remote_control(UserData *user);    
 void package_data_to_json(UserData *user, char *buffer, size_t buffer_size);
 bool send_data_to_server(const char *ip, int port, const char *data_to_send);
@@ -88,7 +96,7 @@ void schedule_task(const char *task_name, int duration_sec) {
     
     for (int i = 1; i <= 3; i++) {
         sleep(1); 
-        printf("   > In progress... (%d%%)\n", i * 33);
+        printf("    > In progress... (%d%%)\n", i * 33);
     }
     
     printf("Task %s finished!\n", task_name); 
@@ -132,7 +140,7 @@ void save_db() {
 
 
 // **********************************************
-// ************ 流程控制與功能實現 ************
+// ************ Flow Control and Features ************
 // **********************************************
 
 int find_dorm_data(const char *location) {
@@ -155,10 +163,11 @@ void initial_setup(UserData *user) {
     // 2. Select Paired Devices
     printf("\n2. Please select devices to pair (max 5):\n");
     
+    // Display list without icons
     for (int i = 0; i < MAX_AVAILABLE_DEVICES; i++) {
-        printf("%d. %s %s\n", i + 1, g_available_devices[i].icon, g_available_devices[i].name);
+        printf("%d. %s\n", i + 1, g_available_devices[i].name);
     }
-    printf("Enter device numbers separated by space or comma (e.g., 1, 3, 4): ");
+    printf("Enter device numbers separated by space or comma (e.g., 1, 3): ");
     
     char choice_str[32]; 
     fgets(choice_str, sizeof(choice_str), stdin);
@@ -173,9 +182,8 @@ void initial_setup(UserData *user) {
         
         if (index >= 1 && index <= MAX_AVAILABLE_DEVICES) {
             user->paired_devices[user->device_count] = g_available_devices[index - 1];
-            printf("Paired: %s %s\n", 
-                   user->paired_devices[user->device_count].icon, 
-                   user->paired_devices[user->device_count].name);
+            // Display confirmation without icon
+            printf("Paired: %s\n", user->paired_devices[user->device_count].name);
             user->device_count++;
         } else if (index != 0) {
             printf("Invalid selection number: %s\n", token);
@@ -191,7 +199,8 @@ bool setup_interface(UserData *user, const char *ip, int port) {
     int choice;
     char input_location[100];
     int db_index;
-    char json_buffer[512]; 
+    // Client setup uses the unified buffer size
+    char json_buffer[JSON_BUFFER_SIZE]; 
 
     while (true) {
         printf("\n==================================\n");
@@ -212,7 +221,7 @@ bool setup_interface(UserData *user, const char *ip, int port) {
             
             initial_setup(user);
             
-            // 持久化與 Socket 傳輸邏輯
+            // Persistence and Socket transmission logic
             g_dorm_db[g_db_size] = *user;
             g_db_size++;
             save_db();
@@ -261,8 +270,9 @@ void display_device_status(UserData *user) {
         Device *dev = &user->paired_devices[i];
         const char *status = dev->is_on ? "ON" : "OFF";
         
-        printf("%s %-15s Status: %-5s Remaining Schedule Time: %d minutes\n", 
-               dev->icon, dev->name, status, dev->remaining_time);
+        // Removed icon from device status display
+        printf("%-15s Status: %-5s Remaining Schedule Time: %d minutes\n", 
+               dev->name, status, dev->remaining_time);
     }
     printf("------------------------------------\n");
 }
@@ -328,19 +338,54 @@ void device_remote_control(UserData *user) {
     }
 }
 
+/**
+ * @brief Packages all paired device data into a single JSON object with a device array.
+ * @param user Pointer to the UserData structure.
+ * @param buffer Output buffer to store the resulting JSON string.
+ * @param buffer_size The maximum size of the output buffer.
+ */
 void package_data_to_json(UserData *user, char *buffer, size_t buffer_size) {
-    if (user->device_count > 0) {
-        snprintf(buffer, buffer_size, 
-                 "{\"location\":\"%s\", \"device_name\":\"%s\", \"status\":%s, \"remaining_time\":%d}",
-                 user->dorm_location, 
-                 user->paired_devices[0].name, 
-                 user->paired_devices[0].is_on ? "true" : "false",
-                 user->paired_devices[0].remaining_time);
-    } else {
+    // FIX: Use a larger internal buffer size for device array construction
+    char devices_array[JSON_BUFFER_SIZE / 2] = ""; 
+    size_t current_len = 0;
+    int written;
+
+    if (user->device_count == 0) {
         snprintf(buffer, buffer_size, 
                  "{\"location\":\"%s\", \"message\":\"No devices paired\"}",
                  user->dorm_location);
+        return;
     }
+
+    // 1. Build the inner devices array string
+    for (int i = 0; i < user->device_count; i++) {
+        Device *dev = &user->paired_devices[i];
+        
+        // Ensure we don't overflow the devices_array buffer. Leave some space (e.g., 50 bytes)
+        if (current_len >= sizeof(devices_array) - 50) { 
+             printf("Warning: JSON device array buffer near overflow, stopping.\n");
+             break;
+        }
+
+        // Format a single device object
+        written = snprintf(devices_array + current_len, sizeof(devices_array) - current_len,
+                           "%s{\"name\":\"%s\", \"status\":%s, \"remaining_time\":%d}",
+                           (i == 0) ? "" : ",", // Prepend comma if not the first element
+                           dev->name, 
+                           dev->is_on ? "true" : "false",
+                           dev->remaining_time);
+
+        if (written > 0) {
+            current_len += written;
+        }
+    }
+
+    // 2. Wrap the device array into the final structure
+    // This uses the main buffer (passed in `buffer`)
+    snprintf(buffer, buffer_size, 
+             "{\"location\":\"%s\", \"devices\":[%s]}",
+             user->dorm_location, 
+             devices_array);
 }
 
 bool send_data_to_server(const char *ip, int port, const char *data_to_send) {
@@ -368,7 +413,7 @@ bool send_data_to_server(const char *ip, int port, const char *data_to_send) {
         return false;
     }
     
-    printf("   > Connection successful!\n");
+    printf("    > Connection successful!\n");
     
     long valread = send(sock, data_to_send, strlen(data_to_send), 0);
     
@@ -378,7 +423,7 @@ bool send_data_to_server(const char *ip, int port, const char *data_to_send) {
         return false;
     }
     
-    printf("   > Data sent successfully (%ld bytes).\n", valread);
+    printf("    > Data sent successfully (%ld bytes).\n", valread);
     
     close(sock);
     return true;
@@ -391,16 +436,13 @@ bool send_data_to_server(const char *ip, int port, const char *data_to_send) {
 
 void run_main_interface(UserData *user, const char *ip, int port) {
     int choice;
-    char json_buffer[512]; 
+    // FIX: Use the larger unified buffer size
+    char json_buffer[JSON_BUFFER_SIZE]; 
 
     do {
         /*
-        printf("\n==================================\n");
-        printf("Smart Dormitory System Main Menu\n"); 
-        printf("    Current Location: **%s**\n", user->dorm_location);
-        printf("    Target Server: %s:%d\n", ip, port); 
-        printf("==================================\n");
-        */
+         * Main menu title block removed to simplify output
+         */
         
         printf("1. Display Device Status\n");
         printf("2. Set Estimated Time of Arrival\n");
@@ -419,7 +461,7 @@ void run_main_interface(UserData *user, const char *ip, int port) {
             if (index != -1) {
                 // Update the global array with modified data
                 g_dorm_db[index] = *user;
-                save_db(); // 儲存資料庫
+                save_db(); // Save database
             }
         }
         
@@ -438,21 +480,21 @@ void run_main_interface(UserData *user, const char *ip, int port) {
                 send_data_to_server(ip, port, json_buffer);
                 break;
             case 0:
-                // --- 🚨 新增邏輯：退出時清除排程時間並儲存 🚨 ---
+                // --- Logic: Clear scheduled time and save upon exit ---
                 printf("Exiting Main Menu, returning to the Startup Interface.\n"); 
                 
-                // 1. 將所有設備的排程時間歸零
+                // 1. Reset remaining time for all devices
                 for (int i = 0; i < user->device_count; i++) {
                     user->paired_devices[i].remaining_time = 0;
                 }
                 
-                // 2. 將歸零後的數據寫回全域陣列並永久儲存
+                // 2. Write the reset data back to the global array and save permanently
                 if (index != -1) {
                     g_dorm_db[index] = *user;
                     save_db(); 
                     printf("Note: All scheduled times have been reset to 0 and saved.\n");
                 }
-                // --- 🚨 邏輯結束 🚨 ---
+                // --- Logic End ---
                 break;
             default:
                 printf("Invalid selection. Please try again.\n"); 
