@@ -9,11 +9,26 @@
 
 #define DB_FILENAME "dorm_db.dat" 
 #define MAX_DORMS 10              
-#define JSON_BUFFER_SIZE 1024 // Unified buffer size for main JSON data
+#define JSON_BUFFER_SIZE 1024 
 
 // --- Structure Definitions ---
 
-// Device Type Enumeration
+// 🚨 移除 TaskMode Enumeration 🚨
+
+// 🚨 修改後的 Task Structure (只包含 7 個 int 欄位) 🚨
+typedef struct {
+    int user_id;
+    int arrival_time;        // Effective Arrival Time 
+    int original_arrival_time; // User's input ETA
+    int room_id;
+    
+    int duration;            
+    int start_threshold;     
+    
+    int status;              
+} Task;
+
+// Device Type Enumeration (Unchanged)
 typedef enum {
     DEV_WASHER = 0,   // Washer
     DEV_DRYER  = 1,   // Dryer
@@ -28,15 +43,17 @@ typedef struct {
     DeviceType type;    // Device type identifier
 } Device;
 
+// UserData Structure (Used for persistence/local state)
 typedef struct {
-    char dorm_location[100]; // Dormitory location/ID
+    int user_id;  // Used as unique identifier for persistence
+    int room_id;  
+
     Device paired_devices[5]; // Paired device list (Max 5)
     int device_count;
 } UserData;
 
-// --- Fixed Available Devices List ---
+// --- Fixed Available Devices List (Unchanged) ---
 Device g_available_devices[] = {
-    // Device Name, Status, Remaining Time, Icon, Type
     {"Washer", false, 0, "🧺", DEV_WASHER}, 
     {"Dryer", false, 0, "🔥", DEV_DRYER},
     {"Air Conditioner", false, 0, "❄️", DEV_AC}
@@ -57,15 +74,16 @@ void load_db();
 void save_db();
 
 // --- Core Logic & Feature Function Prototypes ---
-int find_dorm_data(const char *location);
+int find_user_data(int user_id); 
 void initial_setup(UserData *user);
 bool setup_interface(UserData *user, const char *ip, int port);
 void run_main_interface(UserData *user, const char *ip, int port);
 void display_device_status(UserData *user);    
 void set_estimated_time(UserData *user);        
 void device_remote_control(UserData *user);    
-void package_data_to_json(UserData *user, char *buffer, size_t buffer_size);
-bool send_data_to_server(const char *ip, int port, const char *data_to_send);
+
+void prepare_task_struct(UserData *user, Task *task_out);
+bool send_data_to_server(const char *ip, int port, const void *data_to_send, size_t data_size);
 
 
 // **********************************************
@@ -117,7 +135,7 @@ void load_db() {
     }
     
     fclose(file);
-    printf("Loaded %d dormitory records from %s.\n", g_db_size, DB_FILENAME);
+    printf("Loaded %d user records from %s.\n", g_db_size, DB_FILENAME);
 }
 
 void save_db() {
@@ -143,9 +161,9 @@ void save_db() {
 // ************ Flow Control and Features ************
 // **********************************************
 
-int find_dorm_data(const char *location) {
+int find_user_data(int user_id) {
     for (int i = 0; i < g_db_size; i++) {
-        if (strcmp(g_dorm_db[i].dorm_location, location) == 0) {
+        if (g_dorm_db[i].user_id == user_id) {
             return i;
         }
     }
@@ -155,15 +173,25 @@ int find_dorm_data(const char *location) {
 void initial_setup(UserData *user) {
     printf("\n--- Executing First-Time Setup (Initialization) ---\n");
     
-    // 1. Enter Dormitory Location
-    printf("1. Please enter your dormitory location (as system identifier): ");
-    fgets(user->dorm_location, sizeof(user->dorm_location), stdin);
-    user->dorm_location[strcspn(user->dorm_location, "\n")] = 0;
+    // 1. Enter User ID
+    printf("1. Please enter your User ID: ");
+    user->user_id = get_int_input();
+    if (user->user_id <= 0) {
+        printf("Invalid ID, setting to default 9999.\n");
+        user->user_id = 9999;
+    }
+
+    // 2. Enter Room ID
+    printf("2. Please enter your Room ID: ");
+    user->room_id = get_int_input();
+    if (user->room_id <= 0) {
+        printf("Invalid Room ID, setting to default 101.\n");
+        user->room_id = 101;
+    }
     
-    // 2. Select Paired Devices
-    printf("\n2. Please select devices to pair (max 5):\n");
+    // 3. Select Paired Devices
+    printf("\n3. Please select devices to pair (max 5):\n");
     
-    // Display list without icons
     for (int i = 0; i < MAX_AVAILABLE_DEVICES; i++) {
         printf("%d. %s\n", i + 1, g_available_devices[i].name);
     }
@@ -182,7 +210,6 @@ void initial_setup(UserData *user) {
         
         if (index >= 1 && index <= MAX_AVAILABLE_DEVICES) {
             user->paired_devices[user->device_count] = g_available_devices[index - 1];
-            // Display confirmation without icon
             printf("Paired: %s\n", user->paired_devices[user->device_count].name);
             user->device_count++;
         } else if (index != 0) {
@@ -193,21 +220,22 @@ void initial_setup(UserData *user) {
     }
     
     printf("--- Initialization complete. Total paired devices: %d ---\n", user->device_count);
+    printf("--- User ID: %d, Room ID: %d ---\n", user->user_id, user->room_id);
 }
 
 bool setup_interface(UserData *user, const char *ip, int port) { 
     int choice;
-    char input_location[100];
+    int input_user_id;
     int db_index;
-    // Client setup uses the unified buffer size
-    char json_buffer[JSON_BUFFER_SIZE]; 
+    
+    Task task_to_send; 
 
     while (true) {
         printf("\n==================================\n");
         printf("System Startup\n"); 
         printf("Is this your first time using the system?\n");
         printf("1. Yes (Proceed to initial setup)\n");
-        printf("2. No (Load existing dormitory data)\n");
+        printf("2. No (Load existing user data)\n");
         printf("0. Exit Program\n");
         printf("Please select: ");
 
@@ -215,7 +243,7 @@ bool setup_interface(UserData *user, const char *ip, int port) {
 
         if (choice == 1) {
             if (g_db_size >= MAX_DORMS) {
-                printf("Database is full. Cannot add new dormitories.\n"); 
+                printf("Database is full. Cannot add new users.\n"); 
                 continue;
             }
             
@@ -226,25 +254,25 @@ bool setup_interface(UserData *user, const char *ip, int port) {
             g_db_size++;
             save_db();
 
-            printf("\n--- STEP: Sending initial setup data to server (Overwrite) ---\n"); 
-            package_data_to_json(user, json_buffer, sizeof(json_buffer));
-            send_data_to_server(ip, port, json_buffer);
+            printf("\n--- STEP: Sending initial setup data to server (Task) ---\n"); 
+            prepare_task_struct(user, &task_to_send);
+            send_data_to_server(ip, port, &task_to_send, sizeof(Task));
             
             return true;
             
         } else if (choice == 2) {
-            printf("Please enter your dormitory location (e.g., North Dorm 305) for verification: ");
-            fgets(input_location, sizeof(input_location), stdin);
-            input_location[strcspn(input_location, "\n")] = 0;
+            printf("Please enter your User ID for verification: ");
+            input_user_id = get_int_input();
 
-            db_index = find_dorm_data(input_location);
+            db_index = find_user_data(input_user_id);
 
             if (db_index != -1) {
                 *user = g_dorm_db[db_index];
-                printf("Dormitory data found! Loaded settings for **%s**.\n", user->dorm_location); 
+                printf("User data found! Loaded settings for User ID: %d, Room ID: %d.\n", 
+                       user->user_id, user->room_id); 
                 return true;
             } else {
-                printf("No dormitory data found for (%s). Please check your input or select first-time setup.\n", input_location); 
+                printf("No user data found for ID (%d). Please check your input or select first-time setup.\n", input_user_id); 
             }
 
         } else if (choice == 0) {
@@ -258,7 +286,7 @@ bool setup_interface(UserData *user, const char *ip, int port) {
 
 // Feature 2: Display Device Status
 void display_device_status(UserData *user) {
-    printf("\nDevice Status Monitoring (%s)\n", user->dorm_location); 
+    printf("\nDevice Status Monitoring (User ID: %d, Room ID: %d)\n", user->user_id, user->room_id); 
     printf("------------------------------------\n");
     
     if (user->device_count == 0) {
@@ -270,14 +298,13 @@ void display_device_status(UserData *user) {
         Device *dev = &user->paired_devices[i];
         const char *status = dev->is_on ? "ON" : "OFF";
         
-        // Removed icon from device status display
         printf("%-15s Status: %-5s Remaining Schedule Time: %d minutes\n", 
                dev->name, status, dev->remaining_time);
     }
     printf("------------------------------------\n");
 }
 
-// Feature 3: Set Estimated Time of Arrival
+// Feature 3: Set Estimated Time of Arrival (Unchanged)
 void set_estimated_time(UserData *user) {
     printf("\nSetting Estimated Time of Arrival (ETA)\n"); 
     printf("Enter estimated time until arrival (in minutes): ");
@@ -304,7 +331,7 @@ void set_estimated_time(UserData *user) {
     notify_user("ETA scheduling complete");
 }
 
-// Feature 4: Device Remote Control
+// Feature 4: Device Remote Control (Unchanged)
 void device_remote_control(UserData *user) {
     printf("\nEntering Remote Control Mode\n"); 
     if (user->device_count == 0) {
@@ -329,6 +356,11 @@ void device_remote_control(UserData *user) {
             printf("%s remotely turned ON.\n", dev->name); 
         } else if (action == 0) {
             dev->is_on = false;
+            // Clear scheduled time when device is turned off
+            if (dev->remaining_time > 0) {
+                dev->remaining_time = 0;
+                printf("[INFO]: Scheduled time for %s reset to 0 minutes.\n", dev->name);
+            }
             printf("%s remotely turned OFF.\n", dev->name); 
         } else {
             printf("Invalid action selected.\n"); 
@@ -338,57 +370,32 @@ void device_remote_control(UserData *user) {
     }
 }
 
-/**
- * @brief Packages all paired device data into a single JSON object with a device array.
- * @param user Pointer to the UserData structure.
- * @param buffer Output buffer to store the resulting JSON string.
- * @param buffer_size The maximum size of the output buffer.
- */
-void package_data_to_json(UserData *user, char *buffer, size_t buffer_size) {
-    // FIX: Use a larger internal buffer size for device array construction
-    char devices_array[JSON_BUFFER_SIZE / 2] = ""; 
-    size_t current_len = 0;
-    int written;
-
-    if (user->device_count == 0) {
-        snprintf(buffer, buffer_size, 
-                 "{\"location\":\"%s\", \"message\":\"No devices paired\"}",
-                 user->dorm_location);
-        return;
-    }
-
-    // 1. Build the inner devices array string
-    for (int i = 0; i < user->device_count; i++) {
-        Device *dev = &user->paired_devices[i];
-        
-        // Ensure we don't overflow the devices_array buffer. Leave some space (e.g., 50 bytes)
-        if (current_len >= sizeof(devices_array) - 50) { 
-             printf("Warning: JSON device array buffer near overflow, stopping.\n");
-             break;
-        }
-
-        // Format a single device object
-        written = snprintf(devices_array + current_len, sizeof(devices_array) - current_len,
-                           "%s{\"name\":\"%s\", \"status\":%s, \"remaining_time\":%d}",
-                           (i == 0) ? "" : ",", // Prepend comma if not the first element
-                           dev->name, 
-                           dev->is_on ? "true" : "false",
-                           dev->remaining_time);
-
-        if (written > 0) {
-            current_len += written;
+// 🚨 Modified: Prepare Task Struct (Removed mode field) 🚨
+void prepare_task_struct(UserData *user, Task *task_out) {
+    
+    // 1. Get the highest scheduled time to represent original_arrival_time
+    int max_remaining_time = 0;
+    for(int i = 0; i < user->device_count; i++) {
+        if (user->paired_devices[i].remaining_time > max_remaining_time) {
+            max_remaining_time = user->paired_devices[i].remaining_time;
         }
     }
 
-    // 2. Wrap the device array into the final structure
-    // This uses the main buffer (passed in `buffer`)
-    snprintf(buffer, buffer_size, 
-             "{\"location\":\"%s\", \"devices\":[%s]}",
-             user->dorm_location, 
-             devices_array);
+    // 2. Initialize the entire Task structure to zero (set all fields to 0)
+    memset(task_out, 0, sizeof(Task));
+    
+    // 3. Fill the required fields
+    task_out->user_id = user->user_id;
+    task_out->original_arrival_time = max_remaining_time; // Use max scheduled time as ETA
+    task_out->room_id = user->room_id;
+    
+    // Output check (Optional, for debugging)
+    printf("[DEBUG] Task struct prepared: ID=%d, Room=%d, ETA=%d\n", 
+           task_out->user_id, task_out->room_id, task_out->original_arrival_time);
 }
 
-bool send_data_to_server(const char *ip, int port, const char *data_to_send) {
+// Send data remains the same (it uses sizeof(Task) dynamically)
+bool send_data_to_server(const char *ip, int port, const void *data_to_send, size_t data_size) {
     int sock = 0;
     struct sockaddr_in serv_addr;
     
@@ -415,7 +422,8 @@ bool send_data_to_server(const char *ip, int port, const char *data_to_send) {
     
     printf("    > Connection successful!\n");
     
-    long valread = send(sock, data_to_send, strlen(data_to_send), 0);
+    // Send raw struct data 
+    long valread = send(sock, data_to_send, data_size, 0);
     
     if (valread < 0) {
         perror("Data sending failed");
@@ -423,7 +431,7 @@ bool send_data_to_server(const char *ip, int port, const char *data_to_send) {
         return false;
     }
     
-    printf("    > Data sent successfully (%ld bytes).\n", valread);
+    printf("    > Data sent successfully (%ld bytes, Expected: %zu bytes).\n", valread, data_size);
     
     close(sock);
     return true;
@@ -436,30 +444,29 @@ bool send_data_to_server(const char *ip, int port, const char *data_to_send) {
 
 void run_main_interface(UserData *user, const char *ip, int port) {
     int choice;
-    // FIX: Use the larger unified buffer size
-    char json_buffer[JSON_BUFFER_SIZE]; 
+    Task task_to_send; 
 
     do {
-        /*
-         * Main menu title block removed to simplify output
-         */
-        
+        printf("\n==================================\n");
+        printf("Smart Dormitory System Main Menu\n"); 
+        printf("    User: %d | Room: %d\n", user->user_id, user->room_id);
+        printf("==================================\n");
+
         printf("1. Display Device Status\n");
         printf("2. Set Estimated Time of Arrival\n");
         printf("3. Remote Control Device\n");
-        printf("4. Send Device Data to Server\n"); 
+        printf("4. Send Task Data to Server (Binary Struct)\n"); 
         printf("0. Exit Main Menu and return to Startup Interface\n"); 
         printf("Please select a function (0-4): ");
         
         choice = get_int_input();
         
         // Find current user's index in the global database
-        int index = find_dorm_data(user->dorm_location);
+        int index = find_user_data(user->user_id);
         
         // Data modifying actions (2, 3) should update the DB and save to file
         if (choice == 2 || choice == 3) { 
             if (index != -1) {
-                // Update the global array with modified data
                 g_dorm_db[index] = *user;
                 save_db(); // Save database
             }
@@ -476,25 +483,24 @@ void run_main_interface(UserData *user, const char *ip, int port) {
                 device_remote_control(user);
                 break;
             case 4: 
-                package_data_to_json(user, json_buffer, sizeof(json_buffer));
-                send_data_to_server(ip, port, json_buffer);
+                prepare_task_struct(user, &task_to_send);
+                send_data_to_server(ip, port, &task_to_send, sizeof(Task));
                 break;
             case 0:
-                // --- Logic: Clear scheduled time and save upon exit ---
+                // Logic: Clear scheduled time and save upon exit
                 printf("Exiting Main Menu, returning to the Startup Interface.\n"); 
                 
-                // 1. Reset remaining time for all devices
+                // Reset remaining time for all devices
                 for (int i = 0; i < user->device_count; i++) {
                     user->paired_devices[i].remaining_time = 0;
                 }
                 
-                // 2. Write the reset data back to the global array and save permanently
+                // Write the reset data back to the global array and save permanently
                 if (index != -1) {
                     g_dorm_db[index] = *user;
                     save_db(); 
                     printf("Note: All scheduled times have been reset to 0 and saved.\n");
                 }
-                // --- Logic End ---
                 break;
             default:
                 printf("Invalid selection. Please try again.\n"); 
@@ -531,7 +537,6 @@ int main(int argc, char *argv[]) {
 
     // 3. System Main Loop
     while(running) {
-        // Pass IP/Port to setup_interface for immediate Socket transmission
         if (setup_interface(&currentUser, server_ip, server_port)) { 
             run_main_interface(&currentUser, server_ip, server_port);
         } else {
