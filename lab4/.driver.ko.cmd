@@ -1,0 +1,1 @@
+cmd_/home/mo/lab4/driver.ko := aarch64-linux-gnu-ld -r -EL  -maarch64elf -T ./scripts/module-common.lds -T ./arch/arm64/kernel/module.lds  --build-id  -o /home/mo/lab4/driver.ko /home/mo/lab4/driver.o /home/mo/lab4/driver.mod.o ;  true

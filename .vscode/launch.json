@@ -8,8 +8,13 @@
       "args": [],
       "stopAtEntry": false,
       "externalConsole": true,
+<<<<<<< HEAD
       "cwd": "c:/Users/莫喬凱/Desktop/EOS/WS6",
       "program": "c:/Users/莫喬凱/Desktop/EOS/WS6/build/Debug/outDebug",
+=======
+      "cwd": "c:/Users/莫喬凱/Desktop/EOS/lab5",
+      "program": "c:/Users/莫喬凱/Desktop/EOS/lab5/build/Debug/outDebug",
+>>>>>>> f3640853deb7ca2545ebdf58f844d0e2b8603b0c
       "MIMode": "gdb",
       "miDebuggerPath": "gdb",
       "setupCommands": [
