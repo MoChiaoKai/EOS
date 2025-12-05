@@ -136,7 +136,7 @@ time_t input_time_to_seconds(const char *time_str) {
 }
 
 void notify_user(const char *task_name) {
-    // printf("\nYour task %s has been completed.\n", task_name);
+    //printf("\nYour task %s has been completed.\n", task_name);
 }
 
 
@@ -229,7 +229,7 @@ void initial_setup(UserData *user) {
         
         if (index >= 1 && index <= MAX_AVAILABLE_DEVICES) {
             user->paired_devices[user->device_count] = g_available_devices[index - 1];
-            printf("Paired: %s\n", user->paired_devices[user->device_count].name); 
+            printf("Controlled: %s\n", user->paired_devices[user->device_count].name); 
             user->device_count++;
         } else if (index != 0) {
             printf("Invalid selection number: %s\n", token);
@@ -286,7 +286,7 @@ bool setup_interface(UserData *user, const char *ip, int port) {
 
             if (db_index != -1) {
                 *user = g_dorm_db[db_index];
-                printf("User data found! User ID: %d, Room ID: %d.\n", 
+                printf("User data found! Loaded settings for User ID: %d, Room ID: %d.\n", 
                        user->user_id, user->room_id); 
                 return true;
             } else {
@@ -318,9 +318,8 @@ void display_device_status(UserData *user) {
 
     for (int i = 0; i < user->device_count; i++) {
         Device *dev = &user->paired_devices[i];
-        
-        // Status is derived from whether target_time has been set
-        const char *status = "OFF"; 
+
+        const char *status = (dev->target_time > 0) ? "ON" : "OFF"; 
         
         // --- Time Display Logic ---
         if (dev->target_time > 0) {
@@ -332,7 +331,7 @@ void display_device_status(UserData *user) {
             strftime(target_time_str, 64, "%H:%M", tm_info); 
 
             if (diff_sec > 0) {
-                // Task is pending, Status is OFF
+                // Task is pending, Status is ON (as per user request)
                 long diff_min = (long)ceil(diff_sec / 60.0);
                 
                 // Corrected status display for absolute time 
@@ -340,7 +339,8 @@ void display_device_status(UserData *user) {
                        dev->name, status, target_time_str, diff_min);
             } else {
                 // Target time reached or passed
-                status = "ON"; // Status changes to ON only when time is reached
+                // Status remains ON temporarily for display, but schedule is cleared below
+                
                 // Reset target_time to 0, fulfilling the 'preserve until time is reached' request
                 dev->target_time = 0; 
                 
