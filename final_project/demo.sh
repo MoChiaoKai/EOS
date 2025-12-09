@@ -1,8 +1,3 @@
-#!/bin/bash
-# 腳本名稱: six_client_no_server.sh
-# 說明: 使用 tmux 啟動 6 個客戶端面板，自動完成註冊、排程和數據傳輸。
-# IMPORTANT: 您必須在執行此腳本前，在另一個終端機中手動啟動伺服器 (./server 8888)。
-
 # --- 配置參數 ---
 SESSION="six_client_only"
 SERVER_PORT=8888
@@ -149,7 +144,7 @@ for i in $(seq 0 $((CLIENT_COUNT - 1))); do
     # 10. Main Menu: 選擇 '3' (Send Task Data to Server)
     tmux send-keys -t $PANEL_INDEX "3" C-m
     
-    # 11. Main Menu: 選擇 '0' (Exit)
+    # 11. Main Menu: 選擇 '1' (Display Device Status)
     tmux send-keys -t $PANEL_INDEX "1" C-m
     
     # 延遲，防止發送衝突

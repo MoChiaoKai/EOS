@@ -10,6 +10,7 @@
 #include <math.h>
 #include <termios.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #define DB_FILENAME "dorm_db.dat"
 #define MAX_DORMS 100
@@ -62,12 +63,13 @@ Device g_available_devices[] = {
     {"Air Conditioner", 0, DEV_AC}};
 #define MAX_AVAILABLE_DEVICES (sizeof(g_available_devices) / sizeof(Device))
 
-// --- Global Database (Dynamic Database) ---
 UserData g_dorm_db[MAX_DORMS];
 int g_db_size = 0;
+int global_socket = -1;
 
 // --- Function Prototypes ---
 void clear_input_buffer();
+int kbhit();
 int get_int_input();
 time_t input_time_to_seconds(const char *time_str);
 void load_db();
@@ -76,11 +78,9 @@ int find_user_data(int user_id);
 void initial_setup(UserData *user);
 bool setup_interface(UserData *user, const char *ip, int port);
 void run_main_interface(UserData *user, const char *ip, int port);
-void display_device_status(UserData *user, const char *ip, int port);
+void display_device_status(UserData *user); // 移除 ip, port
 void set_estimated_time(UserData *user);
 void prepare_task_struct(UserData *user, TaskMsg *msg_out);
-bool send_data_to_server(const char *ip, int port, const void *data_to_send, size_t data_size);
-void process_server_response(UserData *user, const char *ip, int port);
 
 // **********************************************
 // ************ Utility and Persistence ************
@@ -91,7 +91,6 @@ void clear_input_buffer() {
     while ((c = getchar()) != '\n' && c != EOF);
 }
 
-// kbhit implementation for non-blocking key press detection
 int kbhit() {
     struct termios oldt, newt;
     int ch;
@@ -126,11 +125,11 @@ int get_int_input() {
         clear_input_buffer();
         return -1;
     }
+    
     clear_input_buffer();
     return val;
 }
 
-// Convert "HH:MM" string to time_t (seconds since epoch)
 time_t input_time_to_seconds(const char *time_str) {
     int hour, minute;
 
@@ -265,8 +264,6 @@ void initial_setup(UserData *user) {
 
         token = strtok(NULL, " ,\n");
     }
-
-    printf("--- Sign up complete: User ID: %d, Room ID: %d ---\n", user->user_id, user->room_id);
 }
 
 
@@ -274,7 +271,7 @@ bool setup_interface(UserData *user, const char *ip, int port) {
     int choice;
     int input_user_id;
     int db_index;
-
+    struct sockaddr_in serv_addr;
     TaskMsg task_to_send;
 
     while (true) {
@@ -299,11 +296,6 @@ bool setup_interface(UserData *user, const char *ip, int port) {
             g_dorm_db[g_db_size] = *user;
             g_db_size++;
             save_db();
-
-            prepare_task_struct(user, &task_to_send);
-            send_data_to_server(ip, port, &task_to_send, sizeof(TaskMsg));
-
-            return true;
         } else if (choice == 2) {
             printf("\nUser ID: ");
             input_user_id = get_int_input();
@@ -314,9 +306,9 @@ bool setup_interface(UserData *user, const char *ip, int port) {
                 *user = g_dorm_db[db_index];
                 printf("User data found! User ID: %d, Room ID: %d \n",
                        user->user_id, user->room_id);
-                return true;
             } else {
                 printf("\nCan't find User ID: %d, please check your User ID or sign up\n", input_user_id);
+                continue;
             }
         } else if (choice == 0) {
             printf("Exit\n");
@@ -324,52 +316,101 @@ bool setup_interface(UserData *user, const char *ip, int port) {
             return false;
         } else {
             printf("\nInvalid input, please try again\n");
+            continue;
         }
+        
+        if ((global_socket = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
+            perror("Socket creation failed");
+            continue;
+        }
+        serv_addr.sin_family = AF_INET;
+        serv_addr.sin_port = htons(port);
+        
+        if (inet_pton(AF_INET, ip, &serv_addr.sin_addr) <= 0) {
+            printf("Invalid IP Address.\n");
+            close(global_socket);
+            global_socket = -1;
+            continue;
+        }
+        
+        if (connect(global_socket, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
+            perror("Connection failed (Server Offline?)");
+            close(global_socket);
+            global_socket = -1;
+            continue;
+        }
+        printf(" > Connection successful! Long connection established.\n");
+
+        if (choice == 1) {
+            // 註冊時發送初始任務給 Server
+            prepare_task_struct(user, &task_to_send);
+            if (send(global_socket, &task_to_send, sizeof(TaskMsg), 0) < 0) {
+                perror("ERROR: Initial task send failed");
+                close(global_socket);
+                global_socket = -1;
+                continue;
+            }
+            printf(" > Initial task data sent.\n");
+        }
+
+        return true;
     }
 }
 
 // Feature 2: Display Device Status (CLI Version)
-void display_device_status(UserData *user, const char *ip, int port) { 
+void display_device_status(UserData *user) { 
     time_t now;
     struct tm *tm_info;
     char target_time_str[64];
     int db_index = find_user_data(user->user_id);
 
-    int sock = 0;
-    struct sockaddr_in serv_addr;
+    int sock_fd = global_socket; 
     device_state received_state;
-    
     int state_index = user->user_id % 100; 
+    
+    if (sock_fd <= 0) {
+        printf("Error: Connection to server is lost or not established.\n");
+        printf("\nPress Enter and back to main menu...");
+        clear_input_buffer();
+        getchar();
+        system("clear");
+        return;
+    }
+
 
     while(1) { // infinite loop until Enter
         system("clear");
 
         now = time(NULL);
 
-        // --- Network connection, receive and save status ---
-        if (state_index >= 0 && state_index < 100 && (sock = socket(AF_INET, SOCK_STREAM, 0)) >= 0) {
-            serv_addr.sin_family = AF_INET;
-            serv_addr.sin_port = htons(port);
+        TaskMsg req = {0};
+        req.user_id = user->user_id;
+        
+        if (send(sock_fd, &req, sizeof(TaskMsg), 0) < 0) {
+             printf("Error: Failed to send status request. Connection likely broken.\n");
+             global_socket = -1;
+             break;
+        }
+
+        long valread = recv(sock_fd, &received_state, sizeof(device_state), MSG_WAITALL);
+        
+        if (valread == sizeof(device_state)) {
+            user->task_wash_done = (received_state.wash_m[state_index] == 1);
+            user->task_dry_done = (received_state.dry_m[state_index] == 1);
+            user->task_ac_done = (received_state.ac[state_index] == 1);
             
-            if (inet_pton(AF_INET, ip, &serv_addr.sin_addr) > 0 && 
-                connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) >= 0) {
-                
-                TaskMsg req = {0};
-                req.user_id = user->user_id;
-                send(sock, &req, sizeof(TaskMsg), 0);
-                
-                if (recv(sock, &received_state, sizeof(device_state), 0) == sizeof(device_state)) {
-                    user->task_wash_done = (received_state.wash_m[state_index] == 1);
-                    user->task_dry_done = (received_state.dry_m[state_index] == 1);
-                    user->task_ac_done = (received_state.ac[state_index] == 1);
-                    
-                    if (db_index != -1) {
-                        g_dorm_db[db_index] = *user;
-                        save_db();
-                    }
-                }
+            if (db_index != -1) {
+                g_dorm_db[db_index] = *user;
+                save_db();
             }
-            close(sock);
+        } else if (valread == 0) {
+            printf("Error: Server closed connection gracefully.\n");
+            global_socket = -1;
+            break;
+        } else {
+             printf("Error: Failed to receive complete status data (%ld bytes). Connection lost.\n", valread);
+             global_socket = -1;
+             break;
         }
 
         printf("\n--- Device status display (User ID: %d, Room ID: %d) ---\n", user->user_id, user->room_id);
@@ -433,24 +474,22 @@ void display_device_status(UserData *user, const char *ip, int port) {
             is_scheduled ? target_time_str : "N/A",
             task_status_notes);
         }
+
         printf("----------------|----------|--------------|----------------\n");
 
         // Check for Enter key
         if (kbhit()) {
             int ch = getchar();
             if (ch == '\n' || ch == '\r') {
-                break; // Exit loop on Enter key
+                break; 
             } else {
-                ungetc(ch, stdin); // Push back non-Enter key
+                ungetc(ch, stdin); 
             }
         }
-        
         sleep(1);
     }
 
-    printf("\nPress Enter exit...");
     clear_input_buffer();
-    getchar();
     system("clear");
 }
 
@@ -523,7 +562,6 @@ void set_estimated_time(UserData *user) {
     if (db_index != -1) {
         g_dorm_db[db_index] = *user;
         save_db();
-        //printf("排程資料已儲存。\n");
     }
     printf("\nPress Enter and back to main menu...");
     getchar();
@@ -569,54 +607,6 @@ void prepare_task_struct(UserData *user, TaskMsg *msg_out) {
     msg_out->task_mode.MODE_DRY = dry_on;
     msg_out->task_mode.MODE_AC = ac_on;
 
-    /*
-    printf("TaskMsg struct prepared: ID=%d, Room=%d, Latest Target Time=%ld\n",
-           msg_out->user_id, msg_out->room_id, (long)msg_out->original_target_time);
-    printf("TaskMode: WASH=%d, DRY=%d, AC=%d\n",
-           (int)wash_on, (int)dry_on, (int)ac_on);
-    */
-}
-
-bool send_data_to_server(const char *ip, int port, const void *data_to_send, size_t data_size) {
-    int sock = 0;
-    struct sockaddr_in serv_addr;
-
-    //printf("\nAttempting to connect to server %s:%d...\n", ip, port);
-
-    if ((sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-        perror("Socket creation failed");
-        return false;
-    }
-
-    serv_addr.sin_family = AF_INET;
-    serv_addr.sin_port = htons(port);
-
-    if (inet_pton(AF_INET, ip, &serv_addr.sin_addr) <= 0) {
-        printf("Invalid IP Address.\n");
-        close(sock);
-        return false;
-    }
-
-    if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
-        perror("Connection failed (Ensure server is running on the correct IP/Port)");
-        close(sock);
-        return false;
-    }
-
-    printf(" > Connection successful! Sending Message...\n");
-
-    long valread = send(sock, data_to_send, data_size, 0);
-
-    if (valread < 0) {
-        perror("Data sending failed");
-        close(sock);
-        return false;
-    }
-
-    //printf(" > Data sent successfully (%ld bytes).\n", valread);
-
-    close(sock);
-    return true;
 }
 
 // ------------------------------------------------
@@ -624,19 +614,21 @@ bool send_data_to_server(const char *ip, int port, const void *data_to_send, siz
 // ------------------------------------------------
 
 void run_main_interface(UserData *user, const char *ip, int port) {
-    char choice_str[10];
     int choice = -1;
-
-    // Time display variables
     time_t now;
     struct tm *tm_info;
     char time_buffer[64];
-
     TaskMsg task_to_send;
 
     system("clear");
 
     do {
+        // 連線遺失則跳出
+        if (global_socket <= 0) {
+            printf("\nConnection to server lost. Returning to startup interface.\n");
+            break;
+        }
+
         // --- Get and format current time ---
         now = time(NULL);
         tm_info = localtime(&now);
@@ -667,22 +659,29 @@ void run_main_interface(UserData *user, const char *ip, int port) {
         // --- Execute function based on choice ---
         switch (choice) {
         case 1:
-            display_device_status(user, ip, port);
+            display_device_status(user); // 修正：不傳 ip, port
             break;
         case 2:
             set_estimated_time(user);
             break;
         case 3:
-            prepare_task_struct(user, &task_to_send);
-            send_data_to_server(ip, port, &task_to_send, sizeof(TaskMsg));
+            if (global_socket > 0) {
+                prepare_task_struct(user, &task_to_send);
+                if (send(global_socket, &task_to_send, sizeof(TaskMsg), 0) < 0) {
+                    perror("ERROR sending task data");
+                    close(global_socket);
+                    global_socket = -1;
+                } else {
+                    printf("Task data sent to server successfully.\n");
+                }
+            } else {
+                printf("Error: Connection lost. Cannot send data.\n");
+            }
             break;
         case 0:
-            //printf("Exiting Main Menu, returning to the Startup Interface.\n");
-
             if (index != -1) {
                 g_dorm_db[index] = *user;
                 save_db();
-                //printf("Data has been saved\n");
             }
             break;
         default:
@@ -690,6 +689,12 @@ void run_main_interface(UserData *user, const char *ip, int port) {
         }
 
     } while (choice != 0);
+
+    if (global_socket > 0) {
+        close(global_socket);
+        global_socket = -1;
+        printf("\nConnection closed.\n");
+    }
 }
 
 // ------------------------------------------------
